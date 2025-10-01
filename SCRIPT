@@ -3,8 +3,8 @@
 import bpy
 
 # Укажи имена объектов
-SOURCE_NAME = "SOURCE_NAME"  # SOURCE MESH ( for example female mesh )
-TARGET_NAME = "TARGET_NAME"  # TARGET MESH ( for example clothes )
+SOURCE_NAME = "?"  # SOURCE MESH ( for example female mesh )
+TARGET_NAME = "?"  # TARGET MESH ( for example clothes )
 
 
 KEY_WORDS=['None']# укажите, по каким признакам ограничить перенос драйверов, например приписка facs, PBM, eCTRL
@@ -25,8 +25,8 @@ def Basis_check(MESH):
     cloth=MESH
     
     if not cloth.data.shape_keys:
-        bpy.ops.object.shape_key_add(from_mix=False)  # создаёт Basis
-        cloth.data.shape_keys.key_blocks[0].name = "Basis"
+            bpy.ops.object.shape_key_add(from_mix=False)  # создаёт Basis
+            cloth.data.shape_keys.key_blocks[0].name = "Basis"
 
 def cleanup(MESH):
     
@@ -68,12 +68,12 @@ def main(source, target):
     bpy.ops.object.surfacedeform_bind(modifier=surf_def.name)
 
     for key in body.data.shape_keys.key_blocks:
-        if key.name == "Basis":
-            continue
-        elif KEY_WORDS[0] != 'None' and key.name not in KEY_WORDS:
-            continue
-        elif KEY_WORDS[0] == 'None':
+        if KEY_WORDS[0]=='None':
             pass
+        elif any(p in key.name for p in KEY_WORDS):
+            pass
+        else:
+            continue
         # Активируем шейп‑кей
         key.value = 1.0
         Anim_update()
@@ -84,7 +84,7 @@ def main(source, target):
         cloth.select_set(True)
         bpy.context.view_layer.objects.active = cloth
 
-        bpy.ops.object.modifier_apply_as_shapekey(modifier="SurfaceDeform")
+        bpy.ops.object.modifier_apply_as_shapekey(keep_modifier=True ,modifier="SurfaceDeform")
         # Переименовываем последний созданный шейп‑кей одежды
         new_key = cloth.data.shape_keys.key_blocks[-1]
         new_key.name = key.name
@@ -93,6 +93,7 @@ def main(source, target):
         key.value = 0.0
         Anim_update()
     
+    bpy.ops.object.modifier_remove(modifier="SurfaceDeform")
     print("🎉 Script completed! All shape keys transfered.")
 
 main(source,target)
