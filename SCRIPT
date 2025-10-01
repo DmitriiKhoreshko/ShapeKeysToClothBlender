@@ -1,0 +1,98 @@
+#SHAPE KEY TRANSFER SCRIPT
+
+import bpy
+
+# Укажи имена объектов
+SOURCE_NAME = "SOURCE_NAME"  # SOURCE MESH ( for example female mesh )
+TARGET_NAME = "TARGET_NAME"  # TARGET MESH ( for example clothes )
+
+
+KEY_WORDS=['None']# укажите, по каким признакам ограничить перенос драйверов, например приписка facs, PBM, eCTRL
+
+# Получаем объекты
+source = bpy.data.objects.get(SOURCE_NAME)
+target = bpy.data.objects.get(TARGET_NAME)
+
+
+def Anim_update(): #Updating shape transformations
+    for obj in bpy.data.objects:
+        if obj.animation_data and obj.animation_data.drivers:
+            for fcurve in obj.animation_data.drivers:
+                fcurve.update()
+
+def Basis_check(MESH):
+    
+    cloth=MESH
+    
+    if not cloth.data.shape_keys:
+        bpy.ops.object.shape_key_add(from_mix=False)  # создаёт Basis
+        cloth.data.shape_keys.key_blocks[0].name = "Basis"
+
+def cleanup(MESH):
+    
+    mesh=MESH
+    #Обнуляем шейп кеи
+    for shape in mesh.data.shape_keys.key_blocks:
+        
+        print(f"- {shape.name}: {shape.value}")
+        if type(shape.value)==float:
+            shape.value = 0.0
+        elif type(shape.value)==int:
+            shape.value = 0
+        else:
+            continue
+    
+    bpy.context.view_layer.update()
+        
+    Anim_update()
+
+    print("🎉 Done! All shape keys are set to 0.")
+
+def main(source, target):
+        # Получаем объекты
+    Basis_check(target)
+    
+    cleanup(source)
+    cleanup(target)
+    
+    
+    body = source
+    cloth = target
+
+    # Добавляем Surface Deform модификатор к одежде
+    surf_def = cloth.modifiers.new(name="SurfaceDeform", type='SURFACE_DEFORM')
+    surf_def.target = body
+
+    # Привязываем (Bind)
+    bpy.context.view_layer.objects.active = cloth
+    bpy.ops.object.surfacedeform_bind(modifier=surf_def.name)
+
+    for key in body.data.shape_keys.key_blocks:
+        if key.name == "Basis":
+            continue
+        elif KEY_WORDS[0] != 'None' and key.name not in KEY_WORDS:
+            continue
+        elif KEY_WORDS[0] == 'None':
+            pass
+        # Активируем шейп‑кей
+        key.value = 1.0
+        Anim_update()
+        
+        # Применяем Surface Deform как шейп‑кей на одежде
+        
+        bpy.ops.object.select_all(action='DESELECT')
+        cloth.select_set(True)
+        bpy.context.view_layer.objects.active = cloth
+
+        bpy.ops.object.modifier_apply_as_shapekey(modifier="SurfaceDeform")
+        # Переименовываем последний созданный шейп‑кей одежды
+        new_key = cloth.data.shape_keys.key_blocks[-1]
+        new_key.name = key.name
+
+        # Возвращаем значение обратно
+        key.value = 0.0
+        Anim_update()
+    
+    print("🎉 Script completed! All shape keys transfered.")
+
+main(source,target)
