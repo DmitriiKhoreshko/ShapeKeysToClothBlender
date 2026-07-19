@@ -1,99 +1,164 @@
-#SHAPE KEY TRANSFER SCRIPT
-
+# FINAL SHAPE KEY TRANSFER SCRIPT (SHAPEKEY-SAFE BMESH METHOD)
 import bpy
+import bmesh
 
 # Укажи имена объектов
-SOURCE_NAME = "?"  # SOURCE MESH ( for example female mesh )
-TARGET_NAME = "?"  # TARGET MESH ( for example clothes )
+SOURCE_NAME = ""  # SOURCE MESH (тело)
+TARGET_NAME = ""  # TARGET MESH (одежда)
 
-
-KEY_WORDS=['None']# укажите, по каким признакам ограничить перенос драйверов, например приписка facs, PBM, eCTRL
+KEY_WORDS = ['None']  # Ограничение по ключевым словам
 
 # Получаем объекты
 source = bpy.data.objects.get(SOURCE_NAME)
 target = bpy.data.objects.get(TARGET_NAME)
 
 
-def Anim_update(): #Updating shape transformations
+def Anim_update():
     for obj in bpy.data.objects:
         if obj.animation_data and obj.animation_data.drivers:
             for fcurve in obj.animation_data.drivers:
                 fcurve.update()
 
+
 def Basis_check(MESH):
-    
-    cloth=MESH
-    
+    cloth = MESH
     if not cloth.data.shape_keys:
-            bpy.ops.object.shape_key_add(from_mix=False)  # создаёт Basis
-            cloth.data.shape_keys.key_blocks[0].name = "Basis"
+        bpy.ops.object.shape_key_add(from_mix=False)  # создаёт Basis
+        cloth.data.shape_keys.key_blocks[0].name = "Basis"
+
 
 def cleanup(MESH):
-    
-    mesh=MESH
-    #Обнуляем шейп кеи
+    mesh = MESH
+    if not mesh.data.shape_keys:
+        return
     for shape in mesh.data.shape_keys.key_blocks:
-        
-        print(f"- {shape.name}: {shape.value}")
-        if type(shape.value)==float:
+        if type(shape.value) == float:
             shape.value = 0.0
-        elif type(shape.value)==int:
+        elif type(shape.value) == int:
             shape.value = 0
-        else:
-            continue
-    
     bpy.context.view_layer.update()
-        
     Anim_update()
 
-    print("🎉 Done! All shape keys are set to 0.")
+
+def create_perfect_proxy(source_obj):
+    """
+    Создает копию тела, полностью вырезает не-манифолдные ребра из ВСЕХ шейп-кеев 
+    и триангулирует вогнутые полигоны, сохраняя ключи рабочими.
+    """
+    print("📦 Создаем и глубоко очищаем прокси-меш...")
+    
+    bpy.ops.object.select_all(action='DESELECT')
+    source_obj.select_set(True)
+    bpy.context.view_layer.objects.active = source_obj
+    bpy.ops.object.duplicate()
+    
+    proxy = bpy.context.view_layer.objects.active
+    proxy.name = "TEMP_BODY_PROXY"
+    
+    # Чтобы bmesh не сломал шейп-кеи, мы должны чистить их через Edit Mode.
+    # Когда Blender удаляет геометрию в Edit Mode, он удаляет её сразу из всех ключей формы!
+    bpy.ops.object.mode_set(mode='EDIT')
+    
+    bm = bmesh.from_edit_mesh(proxy.data)
+    
+    # 1. Находим и удаляем ребра, у которых больше 2 полигонов (ошибка Edges with more than two polygons)
+    bad_edges = [e for e in bm.edges if len(e.link_faces) > 2]
+    if bad_edges:
+        print(f"🗑️ Код нашел и удаляет {len(bad_edges)} не-манифолдных ребер в Edit Mode...")
+        bmesh.ops.delete(bm, geom=bad_edges, context='EDGES')
+    
+    # 2. Сразу же триангулируем вогнутые полигоны (ошибка Concave polygons)
+    print("📐 Триангулируем сетку прокси...")
+    bmesh.ops.triangulate(bm, faces=bm.faces[:])
+    
+    # Обновляем меш и возвращаемся в Object Mode
+    bmesh.update_edit_mesh(proxy.data)
+    bpy.ops.object.mode_set(mode='OBJECT')
+    
+    return proxy
+
 
 def main(source, target):
-        # Получаем объекты
+    if not source or not target:
+        print("❌ Ошибка: Проверьте имена объектов SOURCE_NAME и TARGET_NAME!")
+        return
+
     Basis_check(target)
-    
     cleanup(source)
     cleanup(target)
-    
-    
+
     body = source
     cloth = target
 
+    # Создаем кристально чистый прокси с исправленной геометрией во всех шейп-кеях
+    proxy_body = create_perfect_proxy(body)
+
     # Добавляем Surface Deform модификатор к одежде
     surf_def = cloth.modifiers.new(name="SurfaceDeform", type='SURFACE_DEFORM')
-    surf_def.target = body
+    surf_def.target = proxy_body
+    surf_def.falloff = 4.0  # Возвращаем стандартный рабочий falloff
 
     # Привязываем (Bind)
     bpy.context.view_layer.objects.active = cloth
-    bpy.ops.object.surfacedeform_bind(modifier=surf_def.name)
+    cloth.select_set(True)
+    
+    print("🔗 Привязка Surface Deform к чистому прокси...")
+    try:
+        bpy.ops.object.surfacedeform_bind(modifier=surf_def.name)
+    except Exception as e:
+        print(f"❌ Не удалось сделать Bind: {e}")
+        bpy.data.objects.remove(proxy_body, do_unlink=True)
+        return
 
+    # Переносим шейп-кеи
+    print("⏳ Перенос шейп-кеев...")
     for key in body.data.shape_keys.key_blocks:
-        if KEY_WORDS[0]=='None':
+        if key.name == "Basis":
+            continue
+            
+        if KEY_WORDS[0] == 'None':
             pass
         elif any(p in key.name for p in KEY_WORDS):
             pass
         else:
             continue
-        # Активируем шейп‑кей
-        key.value = 1.0
+            
+        # Находим шейп-кей на ПРОКСИ-теле и активируем его
+        proxy_key = proxy_body.data.shape_keys.key_blocks.get(key.name)
+        if not proxy_key:
+            print(f"⚠️ Ключ {key.name} не найден на прокси")
+            continue
+            
+        proxy_key.value = 1.0
+        bpy.context.view_layer.update()
         Anim_update()
-        
+
         # Применяем Surface Deform как шейп‑кей на одежде
-        
         bpy.ops.object.select_all(action='DESELECT')
         cloth.select_set(True)
         bpy.context.view_layer.objects.active = cloth
 
-        bpy.ops.object.modifier_apply_as_shapekey(keep_modifier=True ,modifier="SurfaceDeform")
-        # Переименовываем последний созданный шейп‑кей одежды
+        bpy.ops.object.modifier_apply_as_shapekey(keep_modifier=True, modifier="SurfaceDeform")
+        
+        # Переименовываем созданный ключ
         new_key = cloth.data.shape_keys.key_blocks[-1]
         new_key.name = key.name
 
-        # Возвращаем значение обратно
-        key.value = 0.0
+        # Возвращаем значение прокси обратно
+        proxy_key.value = 0.0
+        bpy.context.view_layer.update()
         Anim_update()
-    
-    bpy.ops.object.modifier_remove(modifier="SurfaceDeform")
-    print("🎉 Script completed! All shape keys transfered.")
 
-main(source,target)
+    # Очистка сцены от временного модификатора
+    bpy.ops.object.select_all(action='DESELECT')
+    cloth.select_set(True)
+    bpy.context.view_layer.objects.active = cloth
+    bpy.ops.object.modifier_remove(modifier="SurfaceDeform")
+    
+    # Удаляем прокси
+    bpy.data.objects.remove(proxy_body, do_unlink=True)
+    
+    print("🎉 Скрипт успешно завершен! Проверьте вкладку Shape Keys у одежды.")
+
+
+main(source, target)
